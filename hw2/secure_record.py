@@ -28,19 +28,6 @@ def seal(
     k_enc,
     k_mac,
 ):
-    """
-    Encrypt and authenticate one record.
-
-    Record format:
-        header || iv || ciphertext || tag
-
-    IV:
-        session_id || sequence
-
-    MAC:
-        HMAC-SHA-256(K_mac, header || iv || ciphertext)
-    """
-
     if version != VERSION:
         raise ValueError("Unsupported version")
 
@@ -68,10 +55,13 @@ def seal(
     if not isinstance(plaintext, bytes):
         raise TypeError("plaintext must be bytes")
 
-    # IV = session_id (8 bytes) || sequence (8 bytes)
+    # IV = session_id || sequence
     iv = (
         session_id
-        + sequence.to_bytes(SEQUENCE_SIZE, "big")
+        + sequence.to_bytes(
+            SEQUENCE_SIZE,
+            "big",
+        )
     )
 
     # AES-256-CTR
@@ -88,11 +78,8 @@ def seal(
     )
 
     # Header:
-    # version (1)
-    # direction (1)
-    # sequence (8)
-    # message_type (1)
-    # ciphertext_length (4)
+    # version || direction || sequence ||
+    # message_type || ciphertext_length
     header = (
         struct.pack(
             ">BBQB",
@@ -101,11 +88,13 @@ def seal(
             sequence,
             message_type,
         )
-        + struct.pack(">I", len(ciphertext))
+        + struct.pack(
+            ">I",
+            len(ciphertext),
+        )
     )
 
-    # Encrypt-then-MAC:
-    # HMAC(K_mac, header || iv || ciphertext)
+    # Encrypt-then-MAC
     mac = hmac.HMAC(
         k_mac,
         hashes.SHA256(),
@@ -137,14 +126,6 @@ def open_record(
     k_enc,
     k_mac,
 ):
-    """
-    Verify and decrypt one record.
-
-    IMPORTANT:
-    The HMAC is verified before AES decryption.
-    No plaintext is returned if any check fails.
-    """
-
     if not isinstance(record, bytes):
         raise TypeError("record must be bytes")
 
@@ -158,7 +139,7 @@ def open_record(
         DIRECTION_GATEWAY_TO_NODE,
         DIRECTION_NODE_TO_GATEWAY,
     ):
-        raise ValueError("Invalid expected direction")
+        raise ValueError("Invalid direction")
 
     if not 0 <= expected_sequence < 2**64:
         raise ValueError("Invalid expected sequence")
@@ -175,9 +156,9 @@ def open_record(
     if len(k_mac) != MAC_KEY_SIZE:
         raise ValueError("MAC key must be 32 bytes")
 
-    # -----------------------------
-    # 1. Parse the fixed header
-    # -----------------------------
+    # -------------------------
+    # Parse header
+    # -------------------------
 
     header = record[:HEADER_SIZE]
 
@@ -196,9 +177,9 @@ def open_record(
         header[11:15],
     )[0]
 
-    # -----------------------------
-    # 2. Validate header fields
-    # -----------------------------
+    # -------------------------
+    # Validate header
+    # -------------------------
 
     if version != expected_version:
         raise ValueError("Wrong version")
@@ -222,9 +203,9 @@ def open_record(
     if len(record) != expected_length:
         raise ValueError("Invalid record length")
 
-    # -----------------------------
-    # 3. Extract IV/ciphertext/tag
-    # -----------------------------
+    # -------------------------
+    # Extract fields
+    # -------------------------
 
     iv_start = HEADER_SIZE
     iv_end = iv_start + IV_SIZE
@@ -247,9 +228,9 @@ def open_record(
         ciphertext_end:
     ]
 
-    # -----------------------------
-    # 4. Check the expected IV
-    # -----------------------------
+    # -------------------------
+    # Verify expected IV
+    # -------------------------
 
     expected_iv = (
         session_id
@@ -262,9 +243,9 @@ def open_record(
     if iv != expected_iv:
         raise ValueError("Invalid IV")
 
-    # -----------------------------
-    # 5. VERIFY MAC BEFORE DECRYPTING
-    # -----------------------------
+    # -------------------------
+    # VERIFY MAC BEFORE DECRYPTION
+    # -------------------------
 
     mac = hmac.HMAC(
         k_mac,
@@ -278,15 +259,13 @@ def open_record(
     )
 
     try:
-        # cryptography's verify() performs
-        # the library's constant-time verification.
         mac.verify(received_tag)
     except Exception:
         raise ValueError("Invalid MAC")
 
-    # -----------------------------
-    # 6. Only decrypt after MAC succeeds
-    # -----------------------------
+    # -------------------------
+    # Decrypt only after MAC succeeds
+    # -------------------------
 
     cipher = Cipher(
         algorithms.AES(k_enc),
@@ -304,12 +283,6 @@ def open_record(
 
 
 class RecordSender:
-    """
-    Keeps track of the next sequence number for one direction.
-
-    The first record uses sequence 0.
-    Every successful seal advances to the next sequence.
-    """
 
     def __init__(
         self,
@@ -327,6 +300,7 @@ class RecordSender:
         self.next_sequence = 0
 
     def seal(self, message_type, plaintext):
+
         sequence = self.next_sequence
 
         record = seal(
@@ -346,12 +320,6 @@ class RecordSender:
 
 
 class RecordReceiver:
-    """
-    Keeps track of the exact sequence number expected
-    for one direction.
-
-    Sequence numbers begin at zero.
-    """
 
     def __init__(
         self,
@@ -369,6 +337,7 @@ class RecordReceiver:
         self.expected_sequence = 0
 
     def open_record(self, record, message_type):
+
         plaintext = open_record(
             record,
             self.version,
@@ -380,24 +349,38 @@ class RecordReceiver:
             self.k_mac,
         )
 
-        # Advance only after successful verification/decryption.
+        # Only advance after successful processing.
         self.expected_sequence += 1
 
         return plaintext
 
 
 def expect_rejection(name, function):
+
     try:
         function()
-        print(f"{name}: ACCEPTED  <-- ERROR")
+
+        print(
+            f"{name}: ACCEPTED  <-- ERROR"
+        )
+
+        return False
+
     except (ValueError, TypeError):
-        print(f"{name}: REJECTED")
+
+        print(
+            f"{name}: REJECTED"
+        )
+
+        return True
 
 
 def run_tests():
-    print("=== Task 3 Encrypt-Then-MAC Record Layer ===")
 
-    # These values are from the successful Task 2 run.
+    print(
+        "=== Task 3 Encrypt-Then-MAC Record Layer ==="
+    )
+
     session_id = bytes.fromhex(
         "86003dbbbc7a756e"
     )
@@ -434,11 +417,13 @@ def run_tests():
         b'{"action":"WRITE","path":"notes.txt"}'
     )
 
-    # =========================================================
-    # 1. Normal Gateway -> Node record
-    # =========================================================
+    # ======================================================
+    # 1. Normal record
+    # ======================================================
 
-    print("\n1. Normal Gateway -> Node record")
+    print(
+        "\n1. Normal Gateway -> Node record"
+    )
 
     sender = RecordSender(
         VERSION,
@@ -466,6 +451,10 @@ def run_tests():
         message_type,
     )
 
+    normal_success = (
+        recovered0 == plaintext0
+    )
+
     print(
         "Sequence used:",
         0,
@@ -476,13 +465,20 @@ def run_tests():
         recovered0.decode(),
     )
 
-    print("Normal record: SUCCESS")
+    print(
+        "Normal record:",
+        "SUCCESS"
+        if normal_success
+        else "FAILED",
+    )
 
-    # =========================================================
-    # 2. Second record uses sequence 1
-    # =========================================================
+    # ======================================================
+    # 2. Sequence 1
+    # ======================================================
 
-    print("\n2. Second record / sequence progression")
+    print(
+        "\n2. Second record / sequence progression"
+    )
 
     record1 = sender.seal(
         message_type,
@@ -492,6 +488,12 @@ def run_tests():
     recovered1 = receiver.open_record(
         record1,
         message_type,
+    )
+
+    sequence_success = (
+        recovered1 == plaintext1
+        and sender.next_sequence == 2
+        and receiver.expected_sequence == 2
     )
 
     print(
@@ -504,15 +506,20 @@ def run_tests():
         recovered1.decode(),
     )
 
-    print("Sequence 0 -> 1: SUCCESS")
+    print(
+        "Sequence 0 -> 1:",
+        "SUCCESS"
+        if sequence_success
+        else "FAILED",
+    )
 
-    # =========================================================
-    # 3. Replay sequence 0
-    # =========================================================
+    # ======================================================
+    # 3. Replay
+    # ======================================================
 
     print("\n3. Replay")
 
-    expect_rejection(
+    replay_rejected = expect_rejection(
         "Replay of sequence 0",
         lambda: receiver.open_record(
             record0,
@@ -520,18 +527,17 @@ def run_tests():
         ),
     )
 
-    # =========================================================
+    # ======================================================
     # 4. Modified header
-    # =========================================================
+    # ======================================================
 
     print("\n4. Modified header")
 
     modified_header = bytearray(record0)
 
-    # Change message type in the authenticated header.
     modified_header[10] ^= 1
 
-    expect_rejection(
+    header_rejected = expect_rejection(
         "Modified header",
         lambda: open_record(
             bytes(modified_header),
@@ -545,9 +551,9 @@ def run_tests():
         ),
     )
 
-    # =========================================================
+    # ======================================================
     # 5. Modified ciphertext
-    # =========================================================
+    # ======================================================
 
     print("\n5. Modified ciphertext")
 
@@ -561,7 +567,7 @@ def run_tests():
         ciphertext_start
     ] ^= 1
 
-    expect_rejection(
+    ciphertext_rejected = expect_rejection(
         "Modified ciphertext",
         lambda: open_record(
             bytes(modified_ciphertext),
@@ -575,16 +581,17 @@ def run_tests():
         ),
     )
 
-    # =========================================================
+    # ======================================================
     # 6. Invalid MAC
-    # =========================================================
+    # ======================================================
 
     print("\n6. Invalid MAC")
 
     modified_tag = bytearray(record0)
+
     modified_tag[-1] ^= 1
 
-    expect_rejection(
+    mac_rejected = expect_rejection(
         "Invalid MAC",
         lambda: open_record(
             bytes(modified_tag),
@@ -598,13 +605,13 @@ def run_tests():
         ),
     )
 
-    # =========================================================
+    # ======================================================
     # 7. Wrong direction
-    # =========================================================
+    # ======================================================
 
     print("\n7. Wrong direction")
 
-    expect_rejection(
+    direction_rejected = expect_rejection(
         "Wrong direction",
         lambda: open_record(
             record0,
@@ -618,13 +625,13 @@ def run_tests():
         ),
     )
 
-    # =========================================================
+    # ======================================================
     # 8. Wrong message type
-    # =========================================================
+    # ======================================================
 
     print("\n8. Wrong message type")
 
-    expect_rejection(
+    type_rejected = expect_rejection(
         "Wrong message type",
         lambda: open_record(
             record0,
@@ -638,13 +645,13 @@ def run_tests():
         ),
     )
 
-    # =========================================================
-    # 9. Wrong sequence number
-    # =========================================================
+    # ======================================================
+    # 9. Wrong sequence
+    # ======================================================
 
     print("\n9. Wrong sequence number")
 
-    expect_rejection(
+    sequence_rejected = expect_rejection(
         "Unexpected sequence",
         lambda: open_record(
             record0,
@@ -658,15 +665,15 @@ def run_tests():
         ),
     )
 
-    # =========================================================
-    # 10. Malformed/truncated record
-    # =========================================================
+    # ======================================================
+    # 10. Malformed record
+    # ======================================================
 
     print("\n10. Malformed record")
 
     truncated = record0[:-1]
 
-    expect_rejection(
+    malformed_rejected = expect_rejection(
         "Malformed record",
         lambda: open_record(
             truncated,
@@ -680,11 +687,13 @@ def run_tests():
         ),
     )
 
-    # =========================================================
-    # 11. Node -> Gateway uses separate keys/direction
-    # =========================================================
+    # ======================================================
+    # 11. Node -> Gateway
+    # ======================================================
 
-    print("\n11. Node -> Gateway separate direction/key test")
+    print(
+        "\n11. Node -> Gateway separate direction/key test"
+    )
 
     node_sender = RecordSender(
         VERSION,
@@ -712,6 +721,12 @@ def run_tests():
         message_type,
     )
 
+    separate_direction_success = (
+        node_plaintext == plaintext0
+        and node_sender.next_sequence == 1
+        and gateway_receiver.expected_sequence == 1
+    )
+
     print(
         "Node -> Gateway sequence:",
         0,
@@ -723,8 +738,47 @@ def run_tests():
     )
 
     print(
-        "Separate direction keys: SUCCESS"
+        "Separate direction keys:",
+        "SUCCESS"
+        if separate_direction_success
+        else "FAILED",
     )
+
+    # ======================================================
+    # Final result
+    # ======================================================
+
+    all_tests_passed = all([
+        normal_success,
+        sequence_success,
+        replay_rejected,
+        header_rejected,
+        ciphertext_rejected,
+        mac_rejected,
+        direction_rejected,
+        type_rejected,
+        sequence_rejected,
+        malformed_rejected,
+        separate_direction_success,
+    ])
+
+    print(
+        "\n=== Task 3 Test Result ==="
+    )
+
+    print(
+        "All tests passed:",
+        all_tests_passed,
+    )
+
+    if not all_tests_passed:
+        print(
+            "Task 3 test suite: FAILED"
+        )
+    else:
+        print(
+            "Task 3 test suite: SUCCESS"
+        )
 
 
 if __name__ == "__main__":
