@@ -13,7 +13,7 @@ This project was developed and tested on:
 ## Project Structure
 
 ```text
-hw2/
+
 ├── baseline_ctr.py
 ├── handshake.py
 ├── secure_record.py
